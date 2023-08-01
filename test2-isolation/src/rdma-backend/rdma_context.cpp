@@ -949,16 +949,19 @@ int rdma_context::ClientDatapath() {
     uint32_t batch_size = FLAGS_send_batch;
     uint64_t last_ts = 0;
     size_t j = 0;
-    int iterations_left = FLAGS_iters;
+    int iterations_left = FLAGS_iters * endpoints_.size();
+    std::vector<int> iterations(endpoints_.size(), FLAGS_iters);
     bool run_infinitely = FLAGS_run_infinitely;
     while (true) {
         if (!run_infinitely && iterations_left <= 0)
             break;
-        for (auto ep : endpoints_) {
+	for (int i = 0; i < endpoints_.size(); i++) {
+	    auto ep = endpoints_[i];
             if (!ep) continue;                                // Ignore those dead ones
             if (!ep->GetActivated()) continue;                // YOU ARE NOT PREPARED!
             if ( (int)batch_size > ep->GetSendCredits()) continue;  // YOU DON'T HAVE MONEY!
             // Shuffle the buffer that is used.
+	    if (iterations[i] <= 0) continue;
             for (auto& req : req_vec) {
                 for (int i = 0; i < req.sge_num; i++) {
                     auto buf = PickNextBuffer(0);
@@ -967,6 +970,8 @@ int rdma_context::ClientDatapath() {
                 }
             }
             ep->PostSend(req_vec, j, batch_size, remote_mempools_[ep->GetMemId()]);
+	    iterations[i]--;
+	    iterations_left--;
         }
         for (auto cq : send_cqs_) {
             auto ret = PollEach(cq.cq);
@@ -974,7 +979,6 @@ int rdma_context::ClientDatapath() {
                 LOG(ERROR) << "PollEach() for Sender failed";
                 exit(1);
             }
-            if (ret) iterations_left--; // Send at least iterations msgs.
         }
         for (auto cq : recv_cqs_) {
             if (PollEach(cq.cq) < 0) {
